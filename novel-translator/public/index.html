@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>แปลนิยาย EN → TH</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div id="homeScreen" class="screen">
+    <div class="home-box">
+      <h1>📖 แปลนิยายอังกฤษ → ไทย</h1>
+      <p class="subtitle">วางลิงก์หน้านิยายที่อยากอ่าน แล้วกดแปล</p>
+      <input id="urlInput" type="text" placeholder="วางลิงก์นิยายตรงนี้ เช่น https://..." />
+      <button id="translateBtn">แปลนิยาย</button>
+      <p id="homeError" class="error-text"></p>
+
+      <div id="progressBox" class="progress-box hidden">
+        <p id="progressLabel">กำลังดึงเนื้อหา...</p>
+        <div class="progress-bar-track">
+          <div id="progressBarFill" class="progress-bar-fill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="readerScreen" class="screen hidden">
+    <div class="reader-topbar">
+      <button id="backBtn" title="กลับหน้าแรก">←</button>
+
+      <div class="view-toggle">
+        <button id="viewSideBtn" class="toggle-btn active">อ่านคู่กัน</button>
+        <button id="viewThOnlyBtn" class="toggle-btn">อ่านไทยอย่างเดียว</button>
+      </div>
+
+      <div class="font-controls">
+        <button id="fontMinus">A-</button>
+        <button id="fontPlus">A+</button>
+        <button id="themeToggle">🌙</button>
+      </div>
+    </div>
+
+    <div id="readerContent" class="reader-content"></div>
+
+    <div class="tts-bar">
+      <button id="ttsPlayPause">▶ อ่านออกเสียง</button>
+      <button id="ttsPrev">⏮</button>
+      <button id="ttsNext">⏭</button>
+      <label>ความเร็ว
+        <input id="ttsSpeed" type="range" min="0.5" max="2" step="0.1" value="1">
+      </label>
+      <select id="voiceSelect">
+        <option value="th-TH-PremwadeeNeural">เสียงผู้หญิง (เปรมวดี)</option>
+        <option value="th-TH-NiwatNeural">เสียงผู้ชาย (นิวัฒน์)</option>
+      </select>
+    </div>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>

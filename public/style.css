@@ -1,0 +1,653 @@
+:root {
+  --bg: #faf7f2;
+  --text: #2b2620;
+  --text-muted: #8a7f6f;
+  --card: #ffffff;
+  --accent: #a35d34;
+  --accent-dark: #7d4324;
+  --accent-light: #f5ebe1;
+  --border: #e6ddd1;
+  --highlight: #ffe9a8;
+  --danger: #c0392b;
+  --danger-light: #fdf2f2;
+  --font-size: 18px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+}
+
+body.dark {
+  --bg: #181715;
+  --text: #ece6da;
+  --text-muted: #9e9587;
+  --card: #24221e;
+  --accent: #c47648;
+  --accent-dark: #e08c5a;
+  --accent-light: #382c23;
+  --border: #3b3731;
+  --highlight: #59451c;
+  --danger: #e74c3c;
+  --danger-light: #3d2020;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Sarabun', 'Segoe UI', -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  transition: background 0.2s, color 0.2s;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.hidden { display: none !important; }
+
+/* ---------- ส่วนหัวหลัก (App Header) ---------- */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 19px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+.brand-icon { font-size: 22px; }
+.brand-name { color: var(--accent); }
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ---------- Buttons & UI Controls ---------- */
+.btn {
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--accent-dark); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-secondary {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+}
+.btn-secondary:hover { background: var(--border); }
+.btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-icon {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 7px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.btn-icon:hover { background: var(--border); }
+
+.btn-danger-outline {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.btn-danger-outline:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 0;
+}
+.btn-link:hover { text-decoration: underline; }
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--accent-light);
+  color: var(--accent);
+  border: 1px solid var(--border);
+}
+
+/* ---------- Container Layout ---------- */
+.page-container {
+  max-width: 1000px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 28px 20px 80px;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.page-header h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+}
+.subtitle {
+  color: var(--text-muted);
+  margin: 0;
+  font-size: 14px;
+}
+
+.breadcrumb {
+  margin-bottom: 16px;
+}
+
+/* ---------- หน้าคลังนิยาย (Bookshelf Screen) ---------- */
+.novels-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.novel-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+.novel-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.06);
+}
+
+.novel-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.novel-card-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.4;
+}
+.novel-card-author {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0 0 10px;
+}
+.novel-card-desc {
+  font-size: 14px;
+  color: var(--text);
+  opacity: 0.85;
+  margin: 0 0 16px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.novel-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ---------- หน้ารายละเอียดนิยาย (Novel Detail) ---------- */
+.novel-hero {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  margin-bottom: 30px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.novel-info { flex: 1; min-width: 260px; }
+.novel-info h1 { margin: 0 0 6px; font-size: 28px; }
+.novel-author { color: var(--text-muted); font-size: 14px; margin: 0 0 12px; }
+.novel-desc { font-size: 15px; line-height: 1.7; margin: 0 0 16px; }
+.novel-meta-tags { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.novel-hero-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 190px;
+}
+
+.chapters-section h2 {
+  font-size: 20px;
+  margin: 0 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--accent);
+  display: inline-block;
+}
+
+.chapters-list {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.chapter-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+.chapter-item:last-child { border-bottom: none; }
+.chapter-item:hover { background: var(--bg); }
+
+.chapter-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.chapter-num {
+  font-weight: 700;
+  color: var(--accent);
+  min-width: 60px;
+  font-size: 14px;
+}
+.chapter-title-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+.chapter-title-text:hover { color: var(--accent); }
+.chapter-date {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+  margin-right: 14px;
+}
+.chapter-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 48px 20px;
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  margin-top: 16px;
+}
+.empty-icon { font-size: 40px; margin-bottom: 12px; }
+.empty-state h3 { margin: 0 0 8px; }
+.empty-state p { color: var(--text-muted); margin: 0 0 18px; font-size: 14px; }
+
+/* ---------- หน้าอ่านนิยาย (Reader Screen) ---------- */
+.reader-topbar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  z-index: 10;
+  flex-wrap: wrap;
+}
+
+.reader-titles {
+  display: flex;
+  flex-direction: column;
+  margin-right: auto;
+  max-width: 400px;
+}
+.reader-novel-name { font-size: 12px; color: var(--text-muted); }
+.reader-chapter-name { font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.view-toggle { display: flex; gap: 6px; }
+.toggle-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 13px;
+}
+.toggle-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.font-controls { display: flex; gap: 6px; }
+
+.reader-content {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 30px 20px 60px;
+  font-size: var(--font-size);
+  line-height: 1.9;
+}
+
+.chunk-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px dashed var(--border);
+}
+.chunk-row.th-only { grid-template-columns: 1fr; }
+
+.chunk-en { color: var(--text-muted); font-size: 0.9em; white-space: pre-wrap; }
+.chunk-th { white-space: pre-wrap; }
+
+.chunk-th.reading, .chunk-en.reading {
+  background: var(--highlight);
+  border-radius: 6px;
+  padding: 4px 8px;
+  margin: -4px -8px;
+}
+
+/* แถบนำทางระหว่างตอนใต้เนื้อหา */
+.chapter-nav-bottom {
+  max-width: 900px;
+  margin: 0 auto 120px;
+  padding: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* แถบควบคุม TTS ด้านล่างสุด */
+.tts-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  z-index: 15;
+}
+
+.tts-bar button {
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 600;
+}
+.tts-bar button:hover { background: var(--border); }
+
+.tts-speed-label { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+
+#voiceSelect {
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ---------- Modals ---------- */
+.modal-backdrop {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+  backdrop-filter: blur(2px);
+}
+
+.modal-box {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  max-width: 520px;
+  width: 100%;
+  box-shadow: 0 16px 36px rgba(0,0,0,0.2);
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  overflow: hidden;
+}
+.modal-lg { max-width: 680px; }
+
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.modal-header h3 { margin: 0; font-size: 18px; }
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.modal-close:hover { color: var(--text); }
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.modal-footer {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Form inputs */
+.form-group {
+  margin-bottom: 16px;
+}
+.form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text);
+}
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+.required { color: var(--danger); }
+
+input[type="text"], input[type="number"], textarea {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+}
+input:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.error-text {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 6px;
+  min-height: 18px;
+}
+.status-msg {
+  color: #27ae60;
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+/* Progress Bar */
+.progress-box {
+  margin-top: 14px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.progress-box p { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.progress-bar-track {
+  width: 100%;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+
+/* Glossary manager */
+.glossary-add-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.glossary-list-container {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.glossary-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  gap: 10px;
+}
+.glossary-item:last-child { border-bottom: none; }
+.glossary-en { font-weight: 600; width: 40%; font-size: 14px; }
+.glossary-th-input {
+  width: 50% !important;
+  padding: 4px 8px !important;
+  font-size: 13px !important;
+}
+
+/* ---------- Chapter Mode Tabs (Single / Batch) ---------- */
+.chapter-mode-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 0;
+}
+.mode-tab {
+  background: none;
+  border: none;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+.mode-tab:hover { color: var(--accent); }
+.mode-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* Batch URL preview box */
+.batch-preview {
+  background: var(--accent-light);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-dark);
+  margin-top: 4px;
+}
+body.dark .batch-preview { color: var(--accent); }
+
+@media (max-width: 700px) {
+  .chunk-row { grid-template-columns: 1fr; }
+  .novel-hero { flex-direction: column; }
+  .novel-hero-actions { width: 100%; flex-direction: row; flex-wrap: wrap; }
+  .reader-topbar { gap: 8px; }
+  .chapter-item { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .chapter-date { margin-left: 0; }
+}

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>คลังนิยายแปล EN → TH</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- แถบนำทางด้านบนสุด (Global Navbar) -->
+  <header class="app-header">
+    <div class="nav-brand" id="brandHomeBtn">
+      <span class="brand-icon">📚</span>
+      <span class="brand-name">NovelTranslator</span>
+    </div>
+    <div class="header-actions">
+      <button id="quickTranslateNavBtn" class="btn btn-secondary">⚡ แปลด่วน</button>
+      <button id="globalThemeToggle" class="btn btn-icon" title="เปลี่ยนโหมดสี">🌙</button>
+    </div>
+  </header>
+
+  <!-- หน้าที่ 1: คลังนิยาย (Bookshelf Screen) -->
+  <main id="bookshelfScreen" class="screen">
+    <div class="page-container">
+      <div class="page-header">
+        <div>
+          <h1>📚 คลังนิยายของฉัน</h1>
+          <p class="subtitle">รวมเรื่องที่แปลไว้ อ่านต่อได้ทุกเมื่อ หรือเพิ่มเรื่องใหม่</p>
+        </div>
+        <button id="openNewNovelModalBtn" class="btn btn-primary">➕ เพิ่มนิยายใหม่</button>
+      </div>
+
+      <div id="novelsGrid" class="novels-grid">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <div id="emptyNovelsState" class="empty-state hidden">
+        <div class="empty-icon">📖</div>
+        <h3>ยังไม่มีนิยายในคลัง</h3>
+        <p>เริ่มต้นด้วยการเพิ่มชื่อเรื่องใหม่ แล้วเพิ่มตอนที่ต้องการแปลได้เลย</p>
+        <button id="emptyAddNovelBtn" class="btn btn-primary">➕ เพิ่มนิยายเรื่องแรก</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- หน้าที่ 2: หน้ารายละเอียดนิยายและสารบัญตอน (Novel Detail & Chapters Screen) -->
+  <main id="novelDetailScreen" class="screen hidden">
+    <div class="page-container">
+      <div class="breadcrumb">
+        <button id="backToBookshelfBtn" class="btn-link">← กลับไปคลังนิยาย</button>
+      </div>
+
+      <div class="novel-hero">
+        <div class="novel-info">
+          <h1 id="novelHeroTitle">ชื่อนิยาย</h1>
+          <p id="novelHeroAuthor" class="novel-author">ผู้แต่ง: -</p>
+          <p id="novelHeroDesc" class="novel-desc">เรื่องย่อ...</p>
+          <div class="novel-meta-tags">
+            <span id="novelHeroCount" class="badge">0 ตอน</span>
+            <span id="novelHeroUpdated" class="badge">อัปเดตล่าสุด: -</span>
+          </div>
+        </div>
+        <div class="novel-hero-actions">
+          <button id="openNewChapterModalBtn" class="btn btn-primary">➕ แปลตอนใหม่เข้าเรื่องนี้</button>
+          <button id="openGlossaryModalBtn" class="btn btn-secondary">📖 ศัพท์เฉพาะเรื่องนี้</button>
+          <button id="deleteNovelBtn" class="btn btn-danger-outline" title="ลบนิยายเรื่องนี้">🗑️ ลบเรื่อง</button>
+        </div>
+      </div>
+
+      <div class="chapters-section">
+        <h2>📑 สารบัญตอน</h2>
+        <div id="chaptersList" class="chapters-list">
+          <!-- Rendered dynamically -->
+        </div>
+        <div id="emptyChaptersState" class="empty-state hidden">
+          <p>ยังไม่มีตอนที่แปลในเรื่องนี้</p>
+          <button id="emptyAddChapterBtn" class="btn btn-primary">➕ เพิ่มตอนแรกเลย</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- หน้าที่ 3: หน้าอ่านนิยาย (Reader Screen) -->
+  <main id="readerScreen" class="screen hidden">
+    <div class="reader-topbar">
+      <button id="backToNovelBtn" class="btn btn-icon" title="กลับหน้ารายการตอน">← สารบัญ</button>
+
+      <div class="reader-titles">
+        <span id="readerNovelTitle" class="reader-novel-name">-</span>
+        <span id="readerChapterTitle" class="reader-chapter-name">-</span>
+      </div>
+
+      <div class="view-toggle">
+        <button id="viewSideBtn" class="toggle-btn active">อ่านคู่กัน</button>
+        <button id="viewThOnlyBtn" class="toggle-btn">อ่านไทยอย่างเดียว</button>
+      </div>
+
+      <div class="font-controls">
+        <button id="fontMinus" class="btn btn-icon" title="ลดขนาดฟอนต์">A-</button>
+        <button id="fontPlus" class="btn btn-icon" title="เพิ่มขนาดฟอนต์">A+</button>
+      </div>
+    </div>
+
+    <div id="readerContent" class="reader-content"></div>
+
+    <!-- แถบนำทางระหว่างตอน (Bottom Chapter Navigation) -->
+    <div class="chapter-nav-bottom">
+      <button id="prevChapterBtn" class="btn btn-secondary" disabled>⏮ ตอนก่อนหน้า</button>
+      <button id="bottomTocBtn" class="btn btn-secondary">📑 สารบัญ</button>
+      <button id="nextChapterBtn" class="btn btn-primary" disabled>ตอนถัดไป ⏭</button>
+    </div>
+
+    <!-- แถบเครื่องเล่นเสียง TTS -->
+    <div class="tts-bar">
+      <button id="ttsPlayPause">▶ อ่านออกเสียง</button>
+      <button id="ttsPrev" title="ช่วงก่อนหน้า">⏮</button>
+      <button id="ttsNext" title="ช่วงถัดไป">⏭</button>
+      <label class="tts-speed-label">ความเร็ว
+        <input id="ttsSpeed" type="range" min="0.5" max="2" step="0.1" value="1">
+      </label>
+      <select id="voiceSelect">
+        <option value="th-TH-PremwadeeNeural">เสียงผู้หญิง (เปรมวดี)</option>
+        <option value="th-TH-NiwatNeural">เสียงผู้ชาย (นิวัฒน์)</option>
+      </select>
+    </div>
+  </main>
+
+  <!-- Modal 1: เพิ่มนิยายใหม่ -->
+  <div id="newNovelModal" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>➕ เพิ่มนิยายใหม่</h3>
+        <button class="modal-close" data-close="newNovelModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="newNovelTitle">ชื่อเรื่อง <span class="required">*</span></label>
+          <input id="newNovelTitle" type="text" placeholder="เช่น Worm, Lord of the Mysteries" />
+        </div>
+        <div class="form-group">
+          <label for="newNovelAuthor">ผู้แต่ง / ผู้เขียน</label>
+          <input id="newNovelAuthor" type="text" placeholder="เช่น Wildbow, Cuttlefish That Loves Diving" />
+        </div>
+        <div class="form-group">
+          <label for="newNovelDesc">เรื่องย่อ / คำอธิบายสั้นๆ</label>
+          <textarea id="newNovelDesc" rows="3" placeholder="ระบุเรื่องย่อโดยย่อ..."></textarea>
+        </div>
+        <p id="newNovelError" class="error-text"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close="newNovelModal">ยกเลิก</button>
+        <button id="saveNovelBtn" class="btn btn-primary">บันทึกนิยาย</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 2: แปลตอนใหม่เข้าเรื่องนี้ -->
+  <div id="newChapterModal" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>➕ แปลตอนใหม่เข้าเรื่องนี้</h3>
+        <button class="modal-close" data-close="newChapterModal">&times;</button>
+      </div>
+      <div class="modal-body">
+
+        <!-- Mode Toggle Tabs -->
+        <div class="chapter-mode-tabs">
+          <button id="modeSingleBtn" class="mode-tab active">📄 ตอนเดียว</button>
+          <button id="modeBatchBtn" class="mode-tab">📚 หลายตอน (Batch)</button>
+        </div>
+
+        <!-- ===== Single Mode ===== -->
+        <div id="singleModeForm">
+          <div class="form-row">
+            <div class="form-group" style="flex: 1;">
+              <label for="newChapterNumber">ตอนที่ (หมายเลข)</label>
+              <input id="newChapterNumber" type="number" step="any" placeholder="เช่น 1, 26.5" />
+            </div>
+            <div class="form-group" style="flex: 2;">
+              <label for="newChapterTitle">ชื่อตอน</label>
+              <input id="newChapterTitle" type="text" placeholder="เช่น Sting 26.5 (ถ้าไม่ใส่จะใช้เลขตอน)" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="newChapterUrl">ลิงก์เว็บตอนนิยาย <span class="required">*</span></label>
+            <input id="newChapterUrl" type="text" placeholder="วางลิงก์เว็บตอนนิยาย เช่น https://..." />
+          </div>
+        </div>
+
+        <!-- ===== Batch Mode ===== -->
+        <div id="batchModeForm" class="hidden">
+          <p class="subtitle" style="margin-top:0; margin-bottom: 12px;">วางลิงก์ตอนแรกและตอนสุดท้าย ระบบจะสร้าง URL ทีละ +1 แล้วแปลต่อเนื่องทุกตอน</p>
+          <div class="form-group">
+            <label for="batchStartUrl">ลิงก์ตอนแรก <span class="required">*</span></label>
+            <input id="batchStartUrl" type="text" placeholder="เช่น https://www.pyg-kit.com/books/xxx/chapters/344230" />
+          </div>
+          <div class="form-group">
+            <label for="batchEndUrl">ลิงก์ตอนสุดท้าย <span class="required">*</span></label>
+            <input id="batchEndUrl" type="text" placeholder="เช่น https://www.pyg-kit.com/books/xxx/chapters/344239" />
+          </div>
+          <div class="form-group">
+            <label for="batchStartChapterNum">เริ่มนับตอนที่ (ไม่ใส่ = ต่อจากตอนล่าสุด)</label>
+            <input id="batchStartChapterNum" type="number" step="1" placeholder="เช่น 1" />
+          </div>
+          <div id="batchPreview" class="batch-preview hidden"></div>
+        </div>
+
+        <p id="newChapterError" class="error-text"></p>
+
+        <!-- Progress Box สำหรับการแปล -->
+        <div id="chapterProgressBox" class="progress-box hidden">
+          <p id="chapterProgressLabel">กำลังดึงเนื้อหาจากลิงก์...</p>
+          <div class="progress-bar-track">
+            <div id="chapterProgressBarFill" class="progress-bar-fill"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="cancelChapterBtn" class="btn btn-secondary" data-close="newChapterModal">ยกเลิก</button>
+        <button id="startTranslateChapterBtn" class="btn btn-primary">เริ่มแปลและบันทึก</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- Modal 3: แปลด่วน (Quick Translate) -->
+  <div id="quickTranslateModal" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>⚡ แปลด่วน (เปิดอ่านทันที)</h3>
+        <button class="modal-close" data-close="quickTranslateModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="subtitle" style="margin-top: 0;">วางลิงก์ที่ต้องการอ่าน แปลเสร็จแล้วจะเปิดหน้าอ่านให้ทันที</p>
+        <div class="form-group">
+          <label for="quickUrlInput">ลิงก์หน้านิยาย</label>
+          <input id="quickUrlInput" type="text" placeholder="วางลิงก์ เช่น https://..." />
+        </div>
+        <p id="quickError" class="error-text"></p>
+
+        <div id="quickProgressBox" class="progress-box hidden">
+          <p id="quickProgressLabel">กำลังดึงเนื้อหา...</p>
+          <div class="progress-bar-track">
+            <div id="quickProgressBarFill" class="progress-bar-fill"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close="quickTranslateModal">ปิด</button>
+        <button id="startQuickTranslateBtn" class="btn btn-primary">แปลและอ่าน</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 4: จัดการคำศัพท์เฉพาะของเรื่อง (Glossary) -->
+  <div id="glossaryModal" class="modal-backdrop hidden">
+    <div class="modal-box modal-lg">
+      <div class="modal-header">
+        <h3>📖 คลังคำศัพท์เฉพาะ (Glossary)</h3>
+        <button class="modal-close" data-close="glossaryModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="subtitle" style="margin-top: 0;">คำศัพท์ที่สะสมจากการแปลในแต่ละตอน สามารถเพิ่มหรือแก้ไขคำแปลเพื่อให้ตอนถัดๆ ไปแปลตรงกัน</p>
+        
+        <div class="glossary-add-row">
+          <input id="glossaryNewEn" type="text" placeholder="คำศัพท์/ชื่ออังกฤษ เช่น Skitter" />
+          <input id="glossaryNewTh" type="text" placeholder="คำแปลไทย เช่น สกิตเตอร์" />
+          <button id="addGlossaryItemBtn" class="btn btn-primary">➕ เพิ่ม</button>
+        </div>
+
+        <div id="glossaryListContainer" class="glossary-list-container">
+          <!-- Rendered dynamically -->
+        </div>
+        <p id="glossaryStatusMsg" class="status-msg"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close="glossaryModal">ปิด</button>
+        <button id="saveGlossaryBtn" class="btn btn-primary">บันทึกคำศัพท์ทั้งหมด</button>
+      </div>
+    </div>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>
