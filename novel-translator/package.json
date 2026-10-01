@@ -8,7 +8,7 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "express": "^4.22.3",
     "cheerio": "^1.0.0",
     "dotenv": "^16.4.5",
     "msedge-tts": "^2.0.7"
