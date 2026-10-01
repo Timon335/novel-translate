@@ -4,26 +4,77 @@ const cheerio = require('cheerio');
 const crypto = require('crypto');
 const path = require('path');
 const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
-const db = require('./db.js');
+const db = require('./db-postgres.js');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = process.env.PORT || 3000;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:14b';
+const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 30000);
+// Local 14B models can take several minutes per chunk on CPU or low-memory GPUs.
+const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 600000);
+const TTS_TIMEOUT_MS = Number(process.env.TTS_TIMEOUT_MS || 30000);
+const MAX_HTML_BYTES = Number(process.env.MAX_HTML_BYTES || 10 * 1024 * 1024);
+const MAX_BATCH_SIZE = Number(process.env.MAX_BATCH_SIZE || 100);
+const JOB_RETENTION_MS = Number(process.env.JOB_RETENTION_MS || 60 * 60 * 1000);
 
 // เก็บสถานะงานแปลแต่ละงานไว้ใน memory
 const jobs = new Map();
 
+function validateHttpUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(String(value).trim());
+  } catch {
+    throw new Error('ลิงก์ไม่ถูกต้อง');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('รองรับเฉพาะลิงก์ http หรือ https เท่านั้น');
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('ลิงก์ต้องไม่มี username หรือ password');
+  }
+  return parsed.toString();
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error(`การเชื่อมต่อหมดเวลา (${timeoutMs / 1000} วินาที)`);
+    const code = error.cause?.code ? ` (${error.cause.code})` : '';
+    throw new Error(`${error.message || 'การเชื่อมต่อล้มเหลว'}${code}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function scheduleJobCleanup(jobId) {
+  setTimeout(() => jobs.delete(jobId), JOB_RETENTION_MS).unref();
+}
+
 // ---------- ส่วนที่ 1: ดึงเนื้อหานิยายจากลิงก์ (กรองปุ่ม เมนู คอมเมนต์ ออกอย่างหมดจด) ----------
 async function scrapeNovelText(url) {
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-  });
+  const safeUrl = validateHttpUrl(url);
+  let res;
+  try {
+    res = await fetchWithTimeout(safeUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+    });
+  } catch (err) {
+    throw new Error(`เชื่อมต่อเว็บนิยายไม่สำเร็จ: ${err.message}`);
+  }
   if (!res.ok) throw new Error(`เปิดลิงก์ไม่ได้ (HTTP ${res.status})`);
-  const html = await res.text();
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (buffer.byteLength > MAX_HTML_BYTES) {
+    throw new Error(`หน้าเว็บมีขนาดใหญ่เกินไป (จำกัด ${Math.round(MAX_HTML_BYTES / 1024 / 1024)} MB)`);
+  }
+  const html = buffer.toString('utf8');
   const $ = cheerio.load(html);
 
   // ลบส่วนประกอบที่ไม่ใช่เนื้อหานิยายทั้งหมด
@@ -133,6 +184,19 @@ function splitIntoChunks(text, maxChars = 2500) {
   return chunks;
 }
 
+function selectEnglishSourceText(text) {
+  const paragraphs = text.split(/\n\n+/).map(paragraph => paragraph.trim()).filter(Boolean);
+  const englishParagraphs = paragraphs.filter(paragraph => {
+    const englishCount = (paragraph.match(/[A-Za-z]/g) || []).length;
+    const thaiCount = (paragraph.match(/[\u0E00-\u0E7F]/g) || []).length;
+    const cjkCount = (paragraph.match(/[\u3400-\u9FFF]/g) || []).length;
+    const nonEnglishCount = thaiCount + cjkCount;
+    return englishCount >= 12 && englishCount >= nonEnglishCount;
+  });
+
+  return englishParagraphs.length >= 2 ? englishParagraphs.join('\n\n') : text;
+}
+
 // ---------- ส่วนที่ 3: Global Rate Limiter + translateChunk ----------
 
 // ติดตามเวลาที่ส่ง API ล่าสุด เพื่อบังคับ delay ขั้นต่ำระหว่าง request
@@ -148,8 +212,8 @@ async function waitForRateLimit() {
   _lastApiCallTime = Date.now();
 }
 
-// โมเดล Gemini ที่ทำงานได้จริง เรียงตามลำดับความเสถียร
-const ALL_MODELS = ['gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
+// ใช้โมเดลเดียวจาก Ollama ซึ่งทำงานในเครื่องหรือ Cloud ตาม OLLAMA_BASE_URL
+const ALL_MODELS = [OLLAMA_MODEL];
 let _lastWorkingModelIndex = 0;
 
 function parseRetryDelay(errMsg) {
@@ -158,19 +222,50 @@ function parseRetryDelay(errMsg) {
   return null;
 }
 
-async function callGeminiAPI(model, prompt) {
+async function callOllamaAPI(model, prompt) {
   await waitForRateLimit();
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.7 }
-    })
-  });
-  const data = await res.json();
-  return { ok: res.ok, status: res.status, data };
+  const url = `${OLLAMA_BASE_URL}/api/generate`;
+  let res;
+  try {
+    res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        format: 'json',
+        // Lower randomness keeps names, meaning, and sentence-level decisions consistent.
+        options: { temperature: 0.3 }
+      })
+    }, OLLAMA_TIMEOUT_MS);
+  } catch (err) {
+    throw new Error(`เชื่อมต่อ Ollama ที่ ${OLLAMA_BASE_URL} ไม่สำเร็จ: ${err.message}`);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { ok: false, status: res.status, data: { error: { message: data.error || `HTTP ${res.status}` } } };
+  }
+  return {
+    ok: true,
+    status: res.status,
+    data: { candidates: [{ content: { parts: [{ text: data.response || '' }] } }] }
+  };
+}
+
+function filterGlossaryTerms(terms = {}) {
+  const filtered = {};
+  for (const [english, thai] of Object.entries(terms || {})) {
+    const englishText = String(english).trim();
+    const thaiText = String(thai).trim();
+    const hasEnglish = /[A-Za-z]/.test(englishText);
+    const hasCjk = /[\u3400-\u9FFF]/.test(englishText) || /[\u3400-\u9FFF]/.test(thaiText);
+    const hasThai = /[\u0E00-\u0E7F]/.test(thaiText);
+    if (hasEnglish && hasThai && !hasCjk && englishText.length <= 80 && thaiText.length <= 80) {
+      filtered[englishText] = thaiText;
+    }
+  }
+  return filtered;
 }
 
 // ระบบแกะคำแปลที่ปลอดภัย ไร้ข้อผิดพลาด JSON และกรองแท็กส่วนเกินออกทั้งหมด
@@ -191,7 +286,7 @@ function parseGeminiResponse(data) {
         const en = match[1].trim();
         const th = match[2].trim();
         if (en && th && en.length < 50 && th.length < 50) {
-          newTerms[en] = th;
+          Object.assign(newTerms, filterGlossaryTerms({ [en]: th }));
         }
       }
     });
@@ -206,7 +301,7 @@ function parseGeminiResponse(data) {
     if (parsed.translation) {
       return {
         translation: parsed.translation.trim(),
-        newTerms: parsed.newTerms || {}
+        newTerms: filterGlossaryTerms(parsed.newTerms || {})
       };
     }
   } catch {
@@ -218,7 +313,7 @@ function parseGeminiResponse(data) {
       if (termsMatch) {
         termsMatch[1].split(/[,\n]/).forEach(l => {
           const m = l.match(/["']([^"']+)["']\s*:\s*["']([^"']+)["']/);
-          if (m) newTerms[m[1]] = m[2];
+          if (m) Object.assign(newTerms, filterGlossaryTerms({ [m[1]]: m[2] }));
         });
       }
       return {
@@ -237,29 +332,69 @@ function parseGeminiResponse(data) {
   return { translation: cleaned.trim(), newTerms: {} };
 }
 
+// ตรวจว่าผลลัพธ์มีภาษาจีนปนมากเกินไปหรือไม่
+function hasTooMuchChinese(text) {
+  const chineseCount = (text.match(/[\u4E00-\u9FFF\u3400-\u4DBF]/g) || []).length;
+  const thaiCount = (text.match(/[\u0E00-\u0E7F]/g) || []).length;
+  return chineseCount > 5 && chineseCount > thaiCount * 0.3;
+}
+
+// กรอง glossary เฉพาะคำที่ปรากฏใน chunk นั้นจริงๆ (ประหยัด token)
+function filterRelevantGlossary(glossary, chunkText) {
+  const relevant = {};
+  for (const [en, th] of Object.entries(glossary)) {
+    if (chunkText.toLowerCase().includes(en.toLowerCase())) {
+      relevant[en] = th;
+    }
+  }
+  return relevant;
+}
+
+function isUsableThaiTranslation(sourceText, translation) {
+
+  if (!translation || translation.trim().length < 10) return false;
+  const sourceEnglishCount = (sourceText.match(/[A-Za-z]/g) || []).length;
+  const translationThaiCount = (translation.match(/[\u0E00-\u0E7F]/g) || []).length;
+  const translationEnglishCount = (translation.match(/[A-Za-z]/g) || []).length;
+  const minimumThaiCount = Math.max(10, Math.min(40, Math.floor(sourceEnglishCount * 0.04)));
+  return translationThaiCount >= minimumThaiCount && translationThaiCount >= translationEnglishCount;
+}
+
 async function translateChunk(chunkText, glossary) {
-  if (!GEMINI_API_KEY) {
-    throw new Error('ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในไฟล์ .env');
+  if (!OLLAMA_MODEL) {
+    throw new Error('ยังไม่ได้ตั้งค่า OLLAMA_MODEL ในไฟล์ .env');
   }
 
-  const glossaryEntries = Object.entries(glossary);
+  // กรองเฉพาะ glossary ที่ปรากฏใน chunk นี้ (ประหยัด token)
+  const relevantGlossary = filterRelevantGlossary(glossary, chunkText);
+  const glossaryEntries = Object.entries(relevantGlossary);
   const glossaryText = glossaryEntries.length
-    ? `\n\nคำศัพท์/ชื่อเฉพาะที่กำหนดไว้ (ต้องแปลให้ตรงตามนี้เพื่อความต่อเนื่อง):\n${glossaryEntries.map(([en, th]) => `- ${en} = ${th}`).join('\n')}`
+    ? `\n\nคำศัพท์/ชื่อเฉพาะที่กำหนดไว้ (ต้องแปลให้ตรงตามนี้):\n${glossaryEntries.map(([en, th]) => `- ${en} = ${th}`).join('\n')}`
     : '';
 
-  const prompt = `คุณคือนักแปลนิยายมืออาชีพ แปลเนื้อหานิยายภาษาอังกฤษต่อไปนี้เป็นภาษาไทย:
-- สำนวนสละสลวย เป็นธรรมชาติ เหมือนวรรณกรรมแปลมืออาชีพ ไม่แปลแข็งทื่อแบบโปรแกรมแปล
-- คงโทนเสียง อารมณ์ และบุคลิกของตัวละครแต่ละคนให้ตรงต้นฉบับ
-- การจัดย่อหน้า: สำคัญมาก! ต้องคงการจัดย่อหน้าตามต้นฉบับเป๊ะๆ แต่ละย่อหน้าของต้นฉบับต้องแปลเป็นหนึ่งย่อหน้าในภาษาไทย และคั่นระหว่างย่อหน้าด้วยบรรทัดว่าง (\\n\\n) เสมอ
-- ห้ามเขียนคำนำ คำอธิบายเพิ่มเติม หรือข้อความใดๆ นอกเหนือจากรูปแบบที่กำหนดด้านล่าง${glossaryText}
+  const prompt = `คุณคือนักแปลวรรณกรรมนิยายภาษาอังกฤษเป็นภาษาไทย และเป็นบรรณาธิการภาษาไทยเจ้าของภาษา
+จงแปลต้นฉบับด้านล่างให้ครบถ้วน ซื่อตรงต่อความหมาย และอ่านเป็นนิยายไทยที่ลื่นไหลเป็นธรรมชาติ
 
-รูปแบบคำตอบที่ต้องการ:
-===TRANSLATION===
-(ข้อความที่แปลเป็นภาษาไทย โดยเว้นบรรทัดว่างระหว่างย่อหน้าให้ตรงกับต้นฉบับ)
-===GLOSSARY===
-(ถ้าพบชื่อตัวละคร สถานที่ หรือศัพท์เฉพาะใหม่ ให้ระบุ: คำอังกฤษ = คำแปลไทย บรรทัดละ 1 คำ)
+แนวทางการแปล:
+- ถ่ายทอดความหมาย น้ำเสียง อารมณ์ บรรยากาศ มุมมองผู้เล่า และบุคลิกของตัวละครให้ตรงต้นฉบับ
+- เขียนไทยให้เป็นธรรมชาติ ไม่เรียงคำตามไวยากรณ์อังกฤษ ไม่ใช้สำนวนแปลตรงตัวที่ฟังแข็ง
+- ตรวจรายละเอียดให้ตรงทุกจุด โดยเฉพาะเวลา จำนวน การปฏิเสธ เหตุและผล ผู้กระทำ/ผู้ถูกกระทำ และคำนามนามธรรม อย่าสลับความหมายหรือทำข้อมูลตกหล่น
+- ถอดสำนวนเปรียบเทียบเป็นสำนวนไทยที่สื่อความหมายเดียวกัน เช่น การทรยศให้ใช้ “หักหลัง” แทนการแปลภาพคำต่อคำ
+- รักษาระดับภาษาและน้ำเสียงบทสนทนาของแต่ละตัวละครให้สม่ำเสมอ รวมถึงสรรพนามและคำเรียก
+- แปลสำนวน มุก คำเปรียบเทียบ และนัยตามบริบทให้ผู้อ่านไทยเข้าใจ โดยไม่แต่งข้อมูลเพิ่ม
+- ห้ามตัด ย่อ สรุป ขยายความ หรือเติมรายละเอียดที่ต้นฉบับไม่มี
+- แปลประโยคและคำบรรยายเป็นไทยทั้งหมด คงภาษาอังกฤษไว้เฉพาะชื่อเฉพาะ ตัวย่อ หรือศัพท์ระบบที่จำเป็นจริงๆ ห้ามมีประโยคภาษาอังกฤษจากต้นฉบับหลงเหลือ
+- ใช้คำเรียกศัพท์ระบบและชื่อเฉพาะให้ตรงกับ glossary และสม่ำเสมอภายในข้อความ
+- ห้ามมีอักษรจีนหรือญี่ปุ่นหลงมาแทนคำแปล
+- คงลำดับเนื้อหาและจำนวนย่อหน้าให้ตรงต้นฉบับ โดยคั่นแต่ละย่อหน้าด้วยบรรทัดว่าง
+- ตรวจความครบถ้วน ความหมาย การสะกด และความลื่นไหลก่อนตอบ
+- ตอบเป็น JSON เท่านั้น ห้ามมี Markdown คำนำ หรือคำอธิบาย${glossaryText}
 
-ข้อความต้นฉบับที่ต้องแปล:
+ตอบเป็น JSON เท่านั้น ห้ามมี Markdown:
+{"translation":"ข้อความภาษาไทยที่แปลและตรวจสอบแล้ว","newTerms":{"English name":"ชื่อไทย"}}
+ถ้าไม่พบชื่อใหม่ให้ newTerms เป็น {}
+
+SOURCE:
 """
 ${chunkText}
 """`;
@@ -272,23 +407,42 @@ ${chunkText}
 
   let lastError = null;
 
-  // รอบแรก: ลองทุกโมเดล (หากติด rate limit ให้ข้ามไปโมเดลถัดไปทันที)
+  // รอบแรก: ลองทุกโมเดล
   for (let mi = 0; mi < orderedModels.length; mi++) {
     const model = orderedModels[mi];
     try {
-      const { ok, status, data } = await callGeminiAPI(model, prompt);
+      const { ok, status, data } = await callOllamaAPI(model, prompt);
       if (ok) {
         _lastWorkingModelIndex = ALL_MODELS.indexOf(model);
-        console.log(`[Gemini API] ✓ แปลสำเร็จด้วย ${model}`);
-        return parseGeminiResponse(data);
-      }
-      const errMsg = data?.error?.message || `HTTP ${status}`;
-      const isRateLimit = status === 429 || status === 503 ||
-        errMsg.includes('high demand') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('UNAVAILABLE');
-      if (isRateLimit) {
-        console.warn(`[Gemini API] ${model} ติด Rate Limit/High Demand — สลับโมเดลถัดไปทันที`);
-        lastError = new Error(errMsg);
+        const result = parseGeminiResponse(data);
+
+        // ตรวจจับภาษาจีนปน → retry ด้วย prompt เข้มข้นกว่า
+        if (hasTooMuchChinese(result.translation)) {
+          console.warn(`[Ollama] ${model} ส่งภาษาจีนมา — retry ด้วย prompt เข้มข้นกว่า`);
+          const retryPrompt = prompt.replace(
+            'ห้ามเขียนคำนำหรือคำอธิบายใดๆ',
+            '⚠️ ห้ามตอบเป็นภาษาจีนโดยเด็ดขาด ตอบเป็นภาษาไทยเท่านั้น ห้ามเขียนคำนำหรือคำอธิบายใดๆ'
+          );
+          const { ok: ok2, data: data2 } = await callOllamaAPI(model, retryPrompt);
+          if (ok2) {
+            const result2 = parseGeminiResponse(data2);
+            if (!hasTooMuchChinese(result2.translation) && isUsableThaiTranslation(chunkText, result2.translation)) {
+              console.log(`[Ollama] ✓ retry สำเร็จ ไม่มีภาษาจีนแล้ว`);
+              return result2;
+            }
+          }
+          lastError = new Error('ผลลัพธ์มีภาษาจีนปน');
+          continue;
+        }
+
+        if (isUsableThaiTranslation(chunkText, result.translation)) {
+          console.log(`[Ollama] ✓ แปลสำเร็จด้วย ${model}`);
+          return result;
+        }
+        console.warn(`[Ollama] ${model} ส่งคำแปลไม่ครบ — ลองโมเดลถัดไป`);
+        lastError = new Error('คำแปลภาษาไทยไม่ครบถ้วน');
       } else {
+        const errMsg = data?.error?.message || `HTTP ${status}`;
         lastError = new Error(errMsg);
       }
     } catch (err) {
@@ -296,20 +450,21 @@ ${chunkText}
     }
   }
 
-  // รอบสอง: ทุกโมเดลติด rate limit — รอตามคำแนะนำของ API แล้วลองใหม่
-  console.warn('[Gemini API] ทุกโมเดลติด Rate Limit — กำลังรอตามเวลาที่ API แจ้ง...');
-  const apiWait = parseRetryDelay(lastError?.message || '') || 65000;
-  const waitMs = Math.min(apiWait, 70000);
-  await new Promise(resolve => setTimeout(resolve, waitMs));
+  // รอบสอง: ลองใหม่อีกครั้ง
+  console.warn('[Ollama] เรียกโมเดลไม่สำเร็จ — กำลังลองใหม่...');
+  await new Promise(resolve => setTimeout(resolve, 1000));
   _lastApiCallTime = 0;
 
   for (const model of ALL_MODELS) {
     try {
-      const { ok, status, data } = await callGeminiAPI(model, prompt);
+      const { ok, status, data } = await callOllamaAPI(model, prompt);
       if (ok) {
         _lastWorkingModelIndex = ALL_MODELS.indexOf(model);
-        console.log(`[Gemini API] ✓ แปลสำเร็จ (หลังรอ) ด้วย ${model}`);
-        return parseGeminiResponse(data);
+        const result = parseGeminiResponse(data);
+        if (!hasTooMuchChinese(result.translation) && isUsableThaiTranslation(chunkText, result.translation)) {
+          console.log(`[Ollama] ✓ แปลสำเร็จ (หลังลองใหม่) ด้วย ${model}`);
+          return result;
+        }
       }
       lastError = new Error(data?.error?.message || `HTTP ${status}`);
     } catch (err) {
@@ -317,13 +472,18 @@ ${chunkText}
     }
   }
 
-  throw lastError || new Error('Gemini API ติด Quota Limit — กรุณารอสักครู่แล้วลองใหม่');
+  throw lastError || new Error('Ollama ไม่พร้อมใช้งาน กรุณาตรวจสอบว่า Ollama กำลังทำงานอยู่');
 }
 
 // ---------- API: แปลด่วน (Quick Translate) ----------
 app.post('/api/translate-book', async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'กรุณาส่งลิงก์มาด้วย' });
+  try {
+    validateHttpUrl(url);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
 
   const jobId = crypto.randomUUID();
   jobs.set(jobId, { status: 'scraping', chunks: [], glossary: {}, error: null, savedChapterId: null });
@@ -334,6 +494,7 @@ app.post('/api/translate-book', async (req, res) => {
     if (job) {
       job.status = 'error';
       job.error = err.message;
+      scheduleJobCleanup(jobId);
     }
   });
 });
@@ -341,15 +502,20 @@ app.post('/api/translate-book', async (req, res) => {
 // ---------- API: แปลตอนใหม่และบันทึกลง Database ของนิยาย ----------
 app.post('/api/novels/:id/chapters/translate', async (req, res) => {
   const novelId = parseInt(req.params.id, 10);
-  const novel = db.getNovelById(novelId);
+  const novel = await db.getNovelById(novelId);
   if (!novel) return res.status(404).json({ error: 'ไม่พบนิยายเรื่องนี้' });
 
   const { url, chapter_number, title } = req.body;
   if (!url) return res.status(400).json({ error: 'กรุณาส่งลิงก์มาด้วย' });
+  try {
+    validateHttpUrl(url);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
 
   const jobId = crypto.randomUUID();
   // ดึงคำศัพท์ที่เคยบันทึกไว้ในนิยายเรื่องนี้มาใช้เริ่มต้น
-  const existingGlossary = db.getNovelGlossary(novelId);
+  const existingGlossary = await db.getNovelGlossary(novelId);
   const chapterTitle = title && title.trim() ? title.trim() : (chapter_number ? `ตอนที่ ${chapter_number}` : 'ตอนที่ไม่มีชื่อ');
 
   jobs.set(jobId, {
@@ -375,21 +541,31 @@ app.post('/api/novels/:id/chapters/translate', async (req, res) => {
     if (job) {
       job.status = 'error';
       job.error = err.message;
+      scheduleJobCleanup(jobId);
     }
   });
 });
 
 // ---------- ส่วนที่ 4: ตรวจสอบและแก้ไขคำภาษาไทย ----------
-async function proofreadThai(translatedText) {
-  const prompt = `คุณคือบรรณาธิการนิยายภาษาไทยมืออาชีพ หน้าที่ของคุณคือตรวจสอบและแก้ไขข้อความภาษาไทยต่อไปนี้ให้ถูกต้องสมบูรณ์:
-- แก้ไขการสะกดคำผิด เช่น "ไม่ใช้" → "ไม่ใช่", "กรุณา" → "กรุณา"
-- แก้ไขการเว้นวรรคที่ผิด เช่น การเว้นวรรคเกินหรือขาด
-- แก้ไขการใช้คำเชื่อมหรือไวยากรณ์ที่ผิดเพี้ยน
-- คงย่อหน้าและโครงสร้างข้อความเดิมไว้ทุกอย่าง ห้ามเพิ่มหรือลบเนื้อหา
-- ห้ามแปลใหม่ ห้ามเปลี่ยนความหมาย ให้แก้เฉพาะการสะกดและไวยากรณ์เท่านั้น
-- ห้ามเขียนคำอธิบาย คำนำ หรือข้อความเพิ่มเติมใดๆ ทั้งสิ้น ตอบเฉพาะข้อความที่แก้ไขแล้วเท่านั้น
+async function proofreadThai(sourceText, translatedText) {
+  const thaiCount = (translatedText.match(/[\u0E00-\u0E7F]/g) || []).length;
+  if (thaiCount < 10) return translatedText;
 
-ข้อความที่ต้องตรวจสอบ:
+  const prompt = `คุณคือบรรณาธิการนิยายแปลภาษาไทย เปรียบเทียบคำแปลกับต้นฉบับแล้วแก้ให้ถูกต้อง อ่านเป็นธรรมชาติ และครบถ้วน
+- ตรวจว่าคำแปลรักษารายละเอียดทุกจุดจากต้นฉบับ โดยเฉพาะเวลา จำนวน การปฏิเสธ เหตุและผล ผู้กระทำ/ผู้ถูกกระทำ และความหมายของคำ
+- แก้คำแปลผิดหรือตกหล่นโดยอ้างอิงต้นฉบับ ห้ามเดา เติมเหตุการณ์ หรือเปลี่ยนข้อเท็จจริง
+- แก้คำสะกด วรรคตอน การเว้นวรรค ไวยากรณ์ และสำนวนที่แข็งหรือแปลตรงตัว ให้เป็นภาษาไทยนิยายที่ลื่นไหล
+- ถอดสำนวนอังกฤษตามความหมายเป็นสำนวนไทย ห้ามแปลภาพคำต่อคำจนผิดธรรมชาติ
+- แปลประโยคภาษาอังกฤษที่หลงเหลือเป็นไทย แต่คงชื่อเฉพาะ ตัวย่อ หรือศัพท์ระบบที่จำเป็นไว้
+- ห้ามตัด ย่อ สรุป หรือเพิ่มเนื้อหา และคงน้ำเสียง มุมมอง บุคลิกตัวละคร สรรพนาม คำเรียก และโครงสร้างย่อหน้า
+- ตอบเป็น JSON เท่านั้นในรูปแบบ {"translation":"ข้อความที่แก้ไขแล้ว","newTerms":{}} ห้ามมี Markdown หรือคำอธิบายเพิ่มเติม
+
+ต้นฉบับภาษาอังกฤษ:
+"""
+${sourceText}
+"""
+
+คำแปลภาษาไทย:
 """
 ${translatedText}
 """`;
@@ -401,9 +577,19 @@ ${translatedText}
 
   for (const model of orderedModels) {
     try {
-      const { ok, data } = await callGeminiAPI(model, prompt);
+      const { ok, data } = await callOllamaAPI(model, prompt);
       if (ok) {
-        const corrected = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const parsed = parseGeminiResponse(data);
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        let corrected = parsed.translation || '';
+        if (!corrected && rawText) {
+          try {
+            const rawJson = JSON.parse(rawText);
+            corrected = rawJson.translation || rawJson.text_corrected || '';
+          } catch {
+            corrected = rawText;
+          }
+        }
         return corrected.trim() || translatedText; // fallback to original if empty
       }
     } catch { /* ลองโมเดลถัดไป */ }
@@ -413,8 +599,10 @@ ${translatedText}
 
 async function runTranslationJob(jobId, url, novelMeta = null) {
   const job = jobs.get(jobId);
+  if (!job) throw new Error('ไม่พบงานแปลนี้');
   const rawText = await scrapeNovelText(url);
-  const textChunks = splitIntoChunks(rawText);
+  const sourceText = selectEnglishSourceText(rawText);
+  const textChunks = splitIntoChunks(sourceText, 1400);
 
   job.status = 'translating';
   job.total = textChunks.length;
@@ -425,42 +613,36 @@ async function runTranslationJob(jobId, url, novelMeta = null) {
     job.chunks.push({ en: textChunks[i], th: result.translation });
   }
 
-  // ตรวจสอบและแก้ไขคำภาษาไทยทั้งตอน
   job.status = 'proofreading';
-  job.proofreadDone = 0;
   job.proofreadTotal = job.chunks.length;
-
-  for (let i = 0; i < job.chunks.length; i++) {
-    job.chunks[i].th = await proofreadThai(job.chunks[i].th);
-    job.proofreadDone = i + 1;
+  job.proofreadDone = 0;
+  for (const chunk of job.chunks) {
+    chunk.th = await proofreadThai(chunk.en, chunk.th);
+    job.proofreadDone++;
   }
 
-  // หากเป็นงานแปลของนิยายในฐานข้อมูล ให้บันทึกลง SQLite อัตโนมัติ
+  // บันทึกตอนและ glossary ใน transaction เดียวกันเพื่อไม่ให้ข้อมูลค้างครึ่งหนึ่ง
   if (novelMeta && novelMeta.novelId) {
-    try {
-      const chapterId = db.createChapter({
-        novel_id: novelMeta.novelId,
-        chapter_number: novelMeta.chapterNumber,
-        title: novelMeta.chapterTitle,
-        source_url: url,
-        chunks: job.chunks
-      });
-      // อัปเดตตารางศัพท์เฉพาะของเรื่อง
-      db.saveNovelGlossary(novelMeta.novelId, job.glossary);
-      job.savedChapterId = chapterId;
-      console.log(`[Database] บันทึกตอนสำเร็จ ID: ${chapterId} เข้าเรื่อง ID: ${novelMeta.novelId}`);
-    } catch (dbErr) {
-      console.error('[Database Error] บันทึกตอนลงฐานข้อมูลไม่สำเร็จ:', dbErr);
-    }
+    const chapterId = await db.createChapter({
+      novel_id: novelMeta.novelId,
+      chapter_number: novelMeta.chapterNumber,
+      title: novelMeta.chapterTitle,
+      source_url: url,
+      chunks: job.chunks,
+      glossary: job.glossary
+    });
+    job.savedChapterId = chapterId;
+    console.log(`[Database] บันทึกตอนสำเร็จ ID: ${chapterId} เข้าเรื่อง ID: ${novelMeta.novelId}`);
   }
 
   job.status = 'done';
+  scheduleJobCleanup(jobId);
 }
 
 // ---------- API: แปลหลายตอนพร้อมกัน (Batch Translate) ----------
 app.post('/api/novels/:id/chapters/batch-translate', async (req, res) => {
   const novelId = parseInt(req.params.id, 10);
-  const novel = db.getNovelById(novelId);
+  const novel = await db.getNovelById(novelId);
   if (!novel) return res.status(404).json({ error: 'ไม่พบนิยายเรื่องนี้' });
 
   const { startUrl, endUrl, startChapterNumber } = req.body;
@@ -481,6 +663,9 @@ app.post('/api/novels/:id/chapters/batch-translate', async (req, res) => {
   }
   if (endId < startId) {
     return res.status(400).json({ error: 'URL สุดท้ายต้องมี ID มากกว่าหรือเท่ากับ URL แรก' });
+  }
+  if (endId - startId + 1 > MAX_BATCH_SIZE) {
+    return res.status(400).json({ error: `Batch จำกัดไม่เกิน ${MAX_BATCH_SIZE} ตอนต่อครั้ง` });
   }
 
   // สร้าง URL list step+1
@@ -518,7 +703,7 @@ app.post('/api/novels/:id/chapters/batch-translate', async (req, res) => {
 
   // รันแปลทีละตอนแบบ sequential
   (async () => {
-    const existingGlossary = db.getNovelGlossary(novelId);
+    const existingGlossary = await db.getNovelGlossary(novelId);
     let rollingGlossary = { ...existingGlossary };
 
     for (let i = 0; i < urls.length; i++) {
@@ -558,6 +743,12 @@ app.post('/api/novels/:id/chapters/batch-translate', async (req, res) => {
         batchJob.done++;
         console.log(`[Batch] ✓ ตอน ${i + 1}/${urls.length} แปลสำเร็จ (${url})`);
       } catch (err) {
+        const failedJob = jobs.get(jobId);
+        if (failedJob) {
+          failedJob.status = 'error';
+          failedJob.error = err.message;
+          scheduleJobCleanup(jobId);
+        }
         batchJob.failed++;
         batchJob.errors.push({ index: i, url, error: err.message });
         console.error(`[Batch] ✗ ตอน ${i + 1}/${urls.length} ล้มเหลว: ${err.message}`);
@@ -566,39 +757,41 @@ app.post('/api/novels/:id/chapters/batch-translate', async (req, res) => {
       batchJob.currentStatus = 'done';
     }
     batchJob.status = batchJob.failed > 0 && batchJob.done === 0 ? 'error' : 'done';
+    scheduleJobCleanup(batchJobId);
     console.log(`[Batch] เสร็จสิ้น ${batchJob.done}/${urls.length} ตอน, ล้มเหลว ${batchJob.failed} ตอน`);
   })().catch(err => {
     batchJob.status = 'error';
     batchJob.errors.push({ error: err.message });
+    scheduleJobCleanup(batchJobId);
   });
 });
 
 // ---------- API: ข้อมูลนิยาย (Novels CRUD) ----------
-app.get('/api/novels', (req, res) => {
+app.get('/api/novels', async (req, res) => {
   try {
-    const novels = db.getNovels();
+    const novels = await db.getNovels();
     res.json(novels);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/novels', (req, res) => {
+app.post('/api/novels', async (req, res) => {
   try {
     const { title, author, description } = req.body;
     if (!title || !title.trim()) {
       return res.status(400).json({ error: 'กรุณาระบุชื่อเรื่อง' });
     }
-    const id = db.createNovel({ title, author, description });
+    const id = await db.createNovel({ title, author, description });
     res.json({ id, message: 'สร้างนิยายสำเร็จ' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get('/api/novels/:id', (req, res) => {
+app.get('/api/novels/:id', async (req, res) => {
   try {
-    const novel = db.getNovelById(req.params.id);
+    const novel = await db.getNovelById(req.params.id);
     if (!novel) return res.status(404).json({ error: 'ไม่พบนิยายเรื่องนี้' });
     res.json(novel);
   } catch (err) {
@@ -606,9 +799,9 @@ app.get('/api/novels/:id', (req, res) => {
   }
 });
 
-app.delete('/api/novels/:id', (req, res) => {
+app.delete('/api/novels/:id', async (req, res) => {
   try {
-    db.deleteNovel(req.params.id);
+    await db.deleteNovel(req.params.id);
     res.json({ success: true, message: 'ลบนิยายเรียบร้อย' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -616,9 +809,9 @@ app.delete('/api/novels/:id', (req, res) => {
 });
 
 // ---------- API: ตอนนิยาย (Chapters) ----------
-app.get('/api/chapters/:id', (req, res) => {
+app.get('/api/chapters/:id', async (req, res) => {
   try {
-    const chapter = db.getChapterById(req.params.id);
+    const chapter = await db.getChapterById(req.params.id);
     if (!chapter) return res.status(404).json({ error: 'ไม่พบตอนนี้' });
     res.json(chapter);
   } catch (err) {
@@ -626,9 +819,9 @@ app.get('/api/chapters/:id', (req, res) => {
   }
 });
 
-app.delete('/api/chapters/:id', (req, res) => {
+app.delete('/api/chapters/:id', async (req, res) => {
   try {
-    db.deleteChapter(req.params.id);
+    await db.deleteChapter(req.params.id);
     res.json({ success: true, message: 'ลบตอนเรียบร้อย' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -636,19 +829,19 @@ app.delete('/api/chapters/:id', (req, res) => {
 });
 
 // ---------- API: ศัพท์เฉพาะประจำเรื่อง (Glossary) ----------
-app.get('/api/novels/:id/glossary', (req, res) => {
+app.get('/api/novels/:id/glossary', async (req, res) => {
   try {
-    const glossary = db.getNovelGlossary(req.params.id);
+    const glossary = await db.getNovelGlossary(req.params.id);
     res.json(glossary);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/novels/:id/glossary', (req, res) => {
+app.post('/api/novels/:id/glossary', async (req, res) => {
   try {
     const { terms } = req.body;
-    db.saveNovelGlossary(req.params.id, terms || {});
+    await db.saveNovelGlossary(req.params.id, terms || {});
     res.json({ success: true, message: 'บันทึกคำศัพท์เรียบร้อย' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -670,8 +863,13 @@ app.listen(PORT, () => {
 app.post('/api/tts', async (req, res) => {
   const { text, voice, rate } = req.body;
   if (!text) return res.status(400).json({ error: 'ไม่มีข้อความให้อ่าน' });
+  if (String(text).length > 20000) return res.status(400).json({ error: 'ข้อความยาวเกินไป (จำกัด 20,000 ตัวอักษร)' });
+  const allowedVoices = new Set(['th-TH-PremwadeeNeural', 'th-TH-NiwatNeural']);
+  if (voice && !allowedVoices.has(voice)) return res.status(400).json({ error: 'ไม่รองรับเสียงนี้' });
+  if (rate && !/^[+-](?:[0-9]|[1-9][0-9]|100)%$/.test(rate)) return res.status(400).json({ error: 'อัตราความเร็วไม่ถูกต้อง' });
 
   try {
+    res.setTimeout(TTS_TIMEOUT_MS, () => res.destroy(new Error('การสร้างเสียงหมดเวลา')));
     const tts = new MsEdgeTTS();
     await tts.setMetadata(voice || 'th-TH-PremwadeeNeural', OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
     const { audioStream } = tts.toStream(text, { rate: rate || '+0%' });
